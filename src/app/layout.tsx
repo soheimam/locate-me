@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const appUrl = process.env.NEXT_PUBLIC_URL || "https://your-app.com";
+const appUrl = "https://locate-me-liart.vercel.app";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
