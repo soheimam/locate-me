@@ -9,7 +9,12 @@ export default function MiniAppProvider({
   children: React.ReactNode;
 }) {
   useEffect(() => {
-    sdk.actions.ready();
+    const setReady = async () => {
+      console.log("[MiniAppProvider] Calling sdk.actions.ready()");
+      await sdk.actions.ready();
+      console.log("[MiniAppProvider] sdk.actions.ready() called successfully");
+    };
+    setReady();
   }, []);
 
   return <>{children}</>;
