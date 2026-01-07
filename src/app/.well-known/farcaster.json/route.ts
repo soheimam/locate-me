@@ -1,5 +1,5 @@
 export async function GET() {
-  const URL = process.env.NEXT_PUBLIC_URL || "https://your-app.com";
+  const URL = process.env.NEXT_PUBLIC_URL || "https://locate-me-liart.vercel.app";
 
   return Response.json({
     accountAssociation: {
