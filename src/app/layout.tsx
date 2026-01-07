@@ -22,14 +22,14 @@ export async function generateMetadata(): Promise<Metadata> {
     other: {
       "fc:miniapp": JSON.stringify({
         version: "next",
-        imageUrl: `${appUrl}/embed-image.png`,
+        imageUrl: `${appUrl}/splash.png`,
         button: {
           title: "Launch Locate Me",
           action: {
             type: "launch_miniapp",
             name: "Locate Me",
             url: appUrl,
-            splashImageUrl: `${appUrl}/splash.png`,
+            splashImageUrl: `${appUrl}/icon.png`,
             splashBackgroundColor: "#000000",
           },
         },
