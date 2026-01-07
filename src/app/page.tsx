@@ -1,6 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+
+// TypeScript declaration for Feature Policy API
+declare global {
+  interface Document {
+    featurePolicy?: {
+      allowsFeature(feature: string): boolean;
+    };
+  }
+}
 
 interface LocationState {
   latitude: number | null;
@@ -9,6 +18,9 @@ interface LocationState {
   loading: boolean;
   error: string | null;
 }
+
+// Track request count for debugging
+let requestCounter = 0;
 
 export default function Home() {
   const [location, setLocation] = useState<LocationState>({
@@ -19,9 +31,40 @@ export default function Home() {
     error: null,
   });
   const [destination, setDestination] = useState("");
+  const pendingRequestRef = useRef<boolean>(false);
+  const hangDetectorRef = useRef<NodeJS.Timeout | null>(null);
 
   const getLocation = useCallback(() => {
+    const requestId = ++requestCounter;
+    const startTime = Date.now();
+
+    console.log(`[Location][Request #${requestId}] ========== NEW LOCATION REQUEST ==========`);
+    console.log(`[Location][Request #${requestId}] Timestamp: ${new Date().toISOString()}`);
+    console.log(`[Location][Request #${requestId}] Previous request pending: ${pendingRequestRef.current}`);
+
+    // Environment checks
+    console.log(`[Location][Request #${requestId}] --- Environment Checks ---`);
+    console.log(`[Location][Request #${requestId}] navigator.geolocation available: ${!!navigator.geolocation}`);
+    console.log(`[Location][Request #${requestId}] navigator.permissions available: ${!!navigator.permissions}`);
+    console.log(`[Location][Request #${requestId}] window.isSecureContext: ${window.isSecureContext}`);
+    console.log(`[Location][Request #${requestId}] window.location.protocol: ${window.location.protocol}`);
+    console.log(`[Location][Request #${requestId}] window.location.hostname: ${window.location.hostname}`);
+    console.log(`[Location][Request #${requestId}] window.location.href: ${window.location.href}`);
+
+    // Check if we're in an iframe (common for mini apps)
+    const isInIframe = window.self !== window.top;
+    console.log(`[Location][Request #${requestId}] Running in iframe: ${isInIframe}`);
+
+    // Check for Feature Policy / Permissions Policy
+    if (document.featurePolicy) {
+      const geolocationAllowed = document.featurePolicy.allowsFeature('geolocation');
+      console.log(`[Location][Request #${requestId}] Feature Policy allows geolocation: ${geolocationAllowed}`);
+    } else {
+      console.log(`[Location][Request #${requestId}] Feature Policy API not available`);
+    }
+
     if (!navigator.geolocation) {
+      console.error(`[Location][Request #${requestId}] FATAL: Geolocation API not supported by browser`);
       setLocation((prev) => ({
         ...prev,
         loading: false,
@@ -30,46 +73,188 @@ export default function Home() {
       return;
     }
 
-    setLocation((prev) => ({ ...prev, loading: true, error: null }));
+    // Check permission status BEFORE making request
+    const checkPermissionAndRequest = async () => {
+      let initialPermissionState: string | null = null;
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          loading: false,
-          error: null,
-        });
-      },
-      (error) => {
-        let errorMessage = "Unable to retrieve your location";
-        switch (error.code) {
-          case error.PERMISSION_DENIED:
-            errorMessage = "Location permission denied";
-            break;
-          case error.POSITION_UNAVAILABLE:
-            errorMessage = "Location information unavailable";
-            break;
-          case error.TIMEOUT:
-            errorMessage = "Location request timed out";
-            break;
+      if (navigator.permissions) {
+        console.log(`[Location][Request #${requestId}] --- Permission Check (BEFORE request) ---`);
+        try {
+          const result = await navigator.permissions.query({ name: "geolocation" });
+          initialPermissionState = result.state;
+          console.log(`[Location][Request #${requestId}] Permission state: "${result.state}"`);
+          console.log(`[Location][Request #${requestId}] - "granted" = permission already given, no popup needed`);
+          console.log(`[Location][Request #${requestId}] - "prompt" = popup should appear to ask user`);
+          console.log(`[Location][Request #${requestId}] - "denied" = permission blocked, popup won't appear`);
+
+          if (result.state === 'denied') {
+            console.error(`[Location][Request #${requestId}] BLOCKED: Permission is denied. User must manually enable in browser/OS settings.`);
+            console.error(`[Location][Request #${requestId}] The permission popup will NOT appear because it was previously denied.`);
+          }
+
+          if (result.state === 'prompt') {
+            console.log(`[Location][Request #${requestId}] Permission popup SHOULD appear now...`);
+            console.log(`[Location][Request #${requestId}] If popup doesn't appear, it may be blocked by:`);
+            console.log(`[Location][Request #${requestId}]   - Browser popup blocker`);
+            console.log(`[Location][Request #${requestId}]   - iframe permissions policy`);
+            console.log(`[Location][Request #${requestId}]   - WebView restrictions`);
+            console.log(`[Location][Request #${requestId}]   - OS-level location services disabled`);
+          }
+
+          // Listen for permission changes
+          result.onchange = () => {
+            console.log(`[Location][Request #${requestId}] PERMISSION CHANGED: "${initialPermissionState}" -> "${result.state}"`);
+            if (result.state === 'granted') {
+              console.log(`[Location][Request #${requestId}] User GRANTED permission!`);
+            } else if (result.state === 'denied') {
+              console.log(`[Location][Request #${requestId}] User DENIED permission!`);
+            }
+          };
+        } catch (err) {
+          console.error(`[Location][Request #${requestId}] Failed to query permissions:`, err);
+          if (err instanceof Error) {
+            console.error(`[Location][Request #${requestId}] Error: ${err.name}: ${err.message}`);
+          }
         }
-        setLocation((prev) => ({
-          ...prev,
-          loading: false,
-          error: errorMessage,
-        }));
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+      } else {
+        console.warn(`[Location][Request #${requestId}] navigator.permissions not available - cannot check permission status`);
       }
-    );
+
+      // Set loading state
+      setLocation((prev) => ({ ...prev, loading: true, error: null }));
+      pendingRequestRef.current = true;
+
+      console.log(`[Location][Request #${requestId}] --- Calling getCurrentPosition ---`);
+      console.log(`[Location][Request #${requestId}] Options: { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }`);
+
+      // Set up hang detector - warns if request takes too long without any callback
+      let callbackReceived = false;
+
+      // Clear any existing hang detector
+      if (hangDetectorRef.current) {
+        clearTimeout(hangDetectorRef.current);
+      }
+
+      // Check at 3 second intervals
+      const checkHang = (elapsed: number) => {
+        if (!callbackReceived && pendingRequestRef.current) {
+          console.warn(`[Location][Request #${requestId}] HANG DETECTED: ${elapsed}ms elapsed, no callback received yet`);
+          console.warn(`[Location][Request #${requestId}] Possible causes:`);
+          console.warn(`[Location][Request #${requestId}]   1. Permission popup is showing but user hasn't responded`);
+          console.warn(`[Location][Request #${requestId}]   2. Permission popup is BLOCKED and won't appear`);
+          console.warn(`[Location][Request #${requestId}]   3. Browser is waiting for OS location services`);
+          console.warn(`[Location][Request #${requestId}]   4. GPS is acquiring signal (can take 30+ seconds outdoors)`);
+
+          if (elapsed >= 5000) {
+            console.error(`[Location][Request #${requestId}] REQUEST STALLED for ${elapsed}ms - likely blocked popup or disabled location services`);
+          }
+
+          // Schedule next check
+          if (elapsed < 10000) {
+            hangDetectorRef.current = setTimeout(() => checkHang(elapsed + 2000), 2000);
+          }
+        }
+      };
+
+      hangDetectorRef.current = setTimeout(() => checkHang(3000), 3000);
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          callbackReceived = true;
+          pendingRequestRef.current = false;
+          if (hangDetectorRef.current) clearTimeout(hangDetectorRef.current);
+
+          const elapsed = Date.now() - startTime;
+          console.log(`[Location][Request #${requestId}] ✓ SUCCESS - Position obtained in ${elapsed}ms`);
+          console.log(`[Location][Request #${requestId}] Latitude: ${position.coords.latitude}`);
+          console.log(`[Location][Request #${requestId}] Longitude: ${position.coords.longitude}`);
+          console.log(`[Location][Request #${requestId}] Accuracy: ${position.coords.accuracy} meters`);
+          console.log(`[Location][Request #${requestId}] Altitude: ${position.coords.altitude}`);
+          console.log(`[Location][Request #${requestId}] Timestamp: ${new Date(position.timestamp).toISOString()}`);
+
+          setLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            loading: false,
+            error: null,
+          });
+        },
+        (error) => {
+          callbackReceived = true;
+          pendingRequestRef.current = false;
+          if (hangDetectorRef.current) clearTimeout(hangDetectorRef.current);
+
+          const elapsed = Date.now() - startTime;
+          console.error(`[Location][Request #${requestId}] ✗ ERROR after ${elapsed}ms`);
+          console.error(`[Location][Request #${requestId}] Error code: ${error.code}`);
+          console.error(`[Location][Request #${requestId}] Error message: "${error.message}"`);
+
+          let errorMessage = "Unable to retrieve your location";
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              console.error(`[Location][Request #${requestId}] PERMISSION_DENIED (code 1)`);
+              console.error(`[Location][Request #${requestId}] This means:`);
+              console.error(`[Location][Request #${requestId}]   - User clicked "Block" or "Deny" on the permission popup`);
+              console.error(`[Location][Request #${requestId}]   - OR permission was previously denied and browser remembers`);
+              console.error(`[Location][Request #${requestId}]   - OR location is disabled at OS level`);
+              console.error(`[Location][Request #${requestId}]   - OR iframe doesn't have allow="geolocation" attribute`);
+
+              // Check permission state after denial
+              if (navigator.permissions) {
+                navigator.permissions.query({ name: "geolocation" }).then(result => {
+                  console.error(`[Location][Request #${requestId}] Current permission state after error: "${result.state}"`);
+                  if (result.state === 'denied') {
+                    console.error(`[Location][Request #${requestId}] CONFIRMED: Permission is now denied. User must reset in browser settings.`);
+                  }
+                });
+              }
+
+              errorMessage = "Location permission denied";
+              break;
+            case error.POSITION_UNAVAILABLE:
+              console.error(`[Location][Request #${requestId}] POSITION_UNAVAILABLE (code 2)`);
+              console.error(`[Location][Request #${requestId}] This means:`);
+              console.error(`[Location][Request #${requestId}]   - Device location services are OFF`);
+              console.error(`[Location][Request #${requestId}]   - GPS/WiFi positioning failed`);
+              console.error(`[Location][Request #${requestId}]   - Network location lookup failed`);
+              errorMessage = "Location information unavailable";
+              break;
+            case error.TIMEOUT:
+              console.error(`[Location][Request #${requestId}] TIMEOUT (code 3)`);
+              console.error(`[Location][Request #${requestId}] This means:`);
+              console.error(`[Location][Request #${requestId}]   - 10 second timeout expired`);
+              console.error(`[Location][Request #${requestId}]   - User may have ignored the permission popup`);
+              console.error(`[Location][Request #${requestId}]   - Permission popup may be blocked/hidden`);
+              console.error(`[Location][Request #${requestId}]   - GPS couldn't get a fix in time`);
+              errorMessage = "Location request timed out";
+              break;
+            default:
+              console.error(`[Location][Request #${requestId}] Unknown error code: ${error.code}`);
+          }
+
+          setLocation((prev) => ({
+            ...prev,
+            loading: false,
+            error: errorMessage,
+          }));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        }
+      );
+    };
+
+    checkPermissionAndRequest();
   }, []);
 
   useEffect(() => {
+    console.log("[Location] Component mounted");
+    console.log("[Location] User Agent:", navigator.userAgent);
+    console.log("[Location] Platform:", navigator.platform);
+    console.log("[Location] Vendor:", navigator.vendor);
     getLocation();
   }, [getLocation]);
 
